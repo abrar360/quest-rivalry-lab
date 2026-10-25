@@ -769,87 +769,136 @@ $('startVR').onclick=async()=>{
   }
 };
 
-function xrFrame(_ts,frame) {
-  const s=frame.session;
-  if(!active||session!==s)return;
+
+function xrFrame(_ts, frame) {
+  const s = frame.session;
+  if (!active || session !== s) return;
 
   s.requestAnimationFrame(xrFrame);
 
-  let left=xrEvents.left;
-  let right=xrEvents.right;
+  const pressed = { left: false, right: false };
+  const hasPad = { left: false, right: false };
+
   xrSampleCount++;
 
-  // Poll controller gamepads as well as XR select events.
-  for(const source of s.inputSources) {
-    const h=source.handedness;
+  for (const source of s.inputSources) {
+    const h = source.handedness;
 
     xrSourcesSeen.add(
-      `${h||'unknown'}:`+
-      `${source.profiles?.join('/')||'no-profile'}:`+
-      `${source.gamepad?'gamepad':'no-gamepad'}`
+      `${h || 'unknown'}:` +
+      `${source.profiles?.join('/') || 'no-profile'}:` +
+      `${source.gamepad ? 'gamepad' : 'no-gamepad'}`
     );
 
-    if(h!=='left'&&h!=='right')continue;
+    if (h !== 'left' && h !== 'right') continue;
 
-    const gp=source.gamepad;
+    const gp = source.gamepad;
 
-    if(gp) {
+    if (gp && gp.buttons && gp.buttons.length) {
+      hasPad[h] = true;
       xrGamepadCount++;
 
-      // WebXR primary trigger is typically button index 0.
-      const trigger=gp.buttons?.[0];
-      const down=!!trigger&&(
-        trigger.pressed||trigger.value>=.55
+      const trigger = gp.buttons[0];
+
+      const down = !!trigger && (
+        trigger.pressed || trigger.value >= 0.55
       );
 
-      if(h==='left')left ||=down;
-      else right ||=down;
+      pressed[h] ||= down;
     }
   }
 
-  if(left||right)xrDetectedPresses++;
+  // FIX: Prefer current gamepad state.
+  // Use WebXR events only when no gamepad is available.
+  const left = hasPad.left
+    ? pressed.left
+    : xrEvents.left;
 
-  if(_ts-xrLastStatusUpdate>450) {
-    xrLastStatusUpdate=_ts;
+  const right = hasPad.right
+    ? pressed.right
+    : xrEvents.right;
 
-    $('controllerStatus').textContent=
-      `Controller status:
-      ${[...xrSourcesSeen].join('; ')||'NO SOURCES'}
-      | L:${left?'DOWN':'up'}
-      R:${right?'DOWN':'up'}
-      | select events:${xrEventCount}
-      | gamepad frames:${xrGamepadCount}`;
+  const state = left && right
+    ? 'mixed'
+    : left
+      ? 'left'
+      : right
+        ? 'right'
+        : 'mixed';
+
+  if (!window.debugCounts) {
+    window.debugCounts = {
+      left: 0,
+      right: 0,
+      mixed: 0
+    };
   }
 
-  const gl=renderer.gl;
-  const layer=renderer.layer;
-  const info=renderer.info;
+  window.debugCounts[state]++;
 
-  const pose=frame.getViewerPose(refSpace);
+  if (left || right) xrDetectedPresses++;
 
-  gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);
-  gl.clearColor(.02,.03,.05,1);
+  if (_ts - xrLastStatusUpdate > 450) {
+    xrLastStatusUpdate = _ts;
+
+    $('controllerStatus').textContent =
+      `Controller status: ` +
+      `L:${left ? 'DOWN' : 'up'} ` +
+      `R:${right ? 'DOWN' : 'up'} ` +
+      `REPORT:${state.toUpperCase()}`;
+  }
+
+  const gl = renderer.gl;
+  const layer = renderer.layer;
+  const info = renderer.info;
+
+  const pose = frame.getViewerPose(refSpace);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+  gl.clearColor(0.02, 0.03, 0.05, 1);
   gl.clear(gl.COLOR_BUFFER_BIT);
 
-  if(pose) {
+  if (pose) {
     gl.useProgram(info.prog);
-    gl.uniform1f(info.leftPressed,left?1:0);
-    gl.uniform1f(info.rightPressed,right?1:0);
 
-    for(const view of pose.views) {
-      const vp=layer.getViewport(view);
+    gl.uniform1f(
+      info.leftPressed,
+      left ? 1 : 0
+    );
 
-      gl.viewport(vp.x,vp.y,vp.width,vp.height);
-      gl.uniform1f(info.eye,view.eye==='right'?1:0);
-      gl.uniform1f(info.ratio,vp.width/vp.height);
-      gl.drawArrays(gl.TRIANGLES,0,6);
+    gl.uniform1f(
+      info.rightPressed,
+      right ? 1 : 0
+    );
+
+    for (const view of pose.views) {
+      const vp = layer.getViewport(view);
+
+      gl.viewport(
+        vp.x,
+        vp.y,
+        vp.width,
+        vp.height
+      );
+
+      gl.uniform1f(
+        info.eye,
+        view.eye === 'right' ? 1 : 0
+      );
+
+      gl.uniform1f(
+        info.ratio,
+        vp.width / vp.height
+      );
+
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
     }
   }
 
-  // Neither or both = mixed.
-  report(left===right?'mixed':left?'left':'right');
+  report(state);
   tick();
 }
+
 
 // Desktop practice mode.
 $('startDemo').onclick=()=>{
